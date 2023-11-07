@@ -1,0 +1,12 @@
+{
+  "version": "0.1.0",
+  "name": "cra-template-evne",
+  "description": "Evne Developers template for Create Vite.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "template"
+  ]
+}

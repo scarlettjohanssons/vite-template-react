@@ -1,0 +1,122 @@
+variables:
+  CI: 'false'
+  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+  GIT_DEPTH: "0"
+
+image: node:latest
+
+cache:
+  paths:
+    - .yarn
+    - node_modules
+    - stage
+    - sandbox
+
+stages:
+  - quality-check
+  - build-stage
+  - deploy-stage
+  - build-sandbox
+  - deploy-sandbox
+
+build-stage:
+  stage: build-stage
+  before_script:
+    - echo "//git.evne.pro/api/v4/projects/316/packages/npm/:_authToken=${CI_JOB_TOKEN}">.npmrc
+    - echo '"@packages:registry" "https://git.evne.pro/api/v4/projects/316/packages/npm/"'>.yarnrc
+    - npx yarn install --production=true
+    - npx yarn install --cache-folder .yarn
+  variables:
+    REACT_APP_SENTRY_ENVIRONMENT: "stage"
+    REACT_APP_API_URL: $STAGE_REACT_APP_API_URL
+    REACT_APP_AUTH: $REACT_APP_AUTH
+
+  script:
+    - echo "Starting build Stage..."
+    - '[ -d "stage" ] && rm -rf stage'
+    - yarn build
+    - mv build stage
+    - echo "Build finished."
+  only:
+    - develop
+
+build-sandbox:
+  stage: build-sandbox
+  before_script:
+    - echo "//git.evne.pro/api/v4/projects/316/packages/npm/:_authToken=${CI_JOB_TOKEN}">.npmrc
+    - echo '"@packages:registry" "https://git.evne.pro/api/v4/projects/316/packages/npm/"'>.yarnrc
+    - npx yarn install --production=true
+    - npx yarn install --cache-folder .yarn
+  variables:
+    REACT_APP_SENTRY_ENVIRONMENT: "sandbox"
+    REACT_APP_API_URL: $SANDBOX_REACT_APP_API_URL
+    REACT_APP_AUTH: $REACT_APP_AUTH
+
+  script:
+    - echo "Starting build Sandbox..."
+    - '[ -d "sandbox" ] && rm -rf sandbox'
+    - yarn build
+    - mv build sandbox
+    - echo "Build finished."
+  only:
+    - sandbox
+
+deploy-stage:
+  stage: deploy-stage
+  needs:
+    - build-stage
+  before_script:
+    - echo "//git.evne.pro/api/v4/projects/316/packages/npm/:_authToken=${CI_JOB_TOKEN}">.npmrc
+    - echo '"@packages:registry" "https://git.evne.pro/api/v4/projects/316/packages/npm/"'>.yarnrc
+    - npx yarn install --production=true --cache-folder .yarn
+    - echo "Adding ssh key..."
+    - 'which ssh-agent || ( apt-get install -qq openssh-client )'
+    - eval $(ssh-agent -s)
+    - ssh-add <(echo "$SSH_KEY")
+    - mkdir -p ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    - echo "SSH key added."
+  script:
+    - echo "Starting deploy..."
+    - scp -r -P $SERVER_SSH_PORT $CI_PROJECT_DIR/stage/* root@$SERVER_URL:/var/www/stage
+    - echo "Deploy finished."
+  only:
+    - develop
+
+deploy-sandbox:
+  stage: deploy-sandbox
+  needs:
+    - build-sandbox
+  before_script:
+    - - echo "//git.evne.pro/api/v4/projects/316/packages/npm/:_authToken=${CI_JOB_TOKEN}">.npmrc
+      - echo '"@packages:registry" "https://git.evne.pro/api/v4/projects/316/packages/npm/"'>.yarnrc
+    - npx yarn install --production=true --cache-folder .yarn
+    - echo "Adding ssh key..."
+    - 'which ssh-agent || ( apt-get install -qq openssh-client )'
+    - eval $(ssh-agent -s)
+    - ssh-add <(echo "$SSH_KEY")
+    - mkdir -p ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    - echo "SSH key added."
+  script:
+    - echo "Starting deploy..."
+    - scp -r -P $SERVER_SSH_PORT $CI_PROJECT_DIR/sandbox/* root@$SERVER_URL:/var/www/sandbox
+    - echo "Deploy finished."
+  only:
+    - sandbox
+
+sonarcloud-check:
+  stage: quality-check
+  image:
+    name: sonarsource/sonar-scanner-cli:latest
+    entrypoint: [""]
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  script:
+    - sonar-scanner -Dsonar.gitlab.failure_notification_mode="exit-code" -Dsonar.qualitygate.wait=true -Dsonar.gitlab.query_wait=2000 -Dsonar.gitlab.query_max_retry=100 -Dsonar.analysis.mode=publish -Dsonar.gitlab.commit_sha="$CI_COMMIT_SHA" -Dsonar.gitlab.ref_name="$CI_COMMIT_REF_NAME" -Dsonar.gitlab.project_id="$CI_PROJECT_PATH" -Dsonar.gitlab.disable_inline_comments=true
+  only:
+    - merge_requests
+    - main
+    - develop
